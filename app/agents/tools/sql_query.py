@@ -1,8 +1,11 @@
+import logging
 import re
 from typing import Any
 from langchain_core.tools import tool
 
 from app.models.business import restaurant_context
+
+logger = logging.getLogger(__name__)
 
 
 class SQLQueryError(Exception):
@@ -82,8 +85,11 @@ async def sql_query(sql: str) -> dict[str, Any]:
 
     sql = result_or_msg
 
+    logger.info(f"[SQL_QUERY] Query: {sql}")
+
     try:
         data = await db_pool.execute_query(sql)
+        logger.info(f"[SQL_QUERY] OK: {len(data)} rows")
         return {
             "success": True,
             "data": data,
@@ -91,6 +97,7 @@ async def sql_query(sql: str) -> dict[str, Any]:
             "error": None,
         }
     except Exception as e:
+        logger.error(f"[SQL_QUERY] ERROR: {type(e).__name__}: {e} | SQL: {sql}")
         error_str = str(e).lower()
         if "connection" in error_str or "connect" in error_str:
             user_message = "No se pudo conectar a la base de datos. Intenta de nuevo en unos momentos."
