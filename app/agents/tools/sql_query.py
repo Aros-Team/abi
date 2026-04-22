@@ -68,7 +68,7 @@ async def sql_query(sql: str) -> dict[str, Any]:
     Returns:
         Dict con 'success', 'data', 'row_count' y 'error' (si aplica)
     """
-    from app.db.mysql import execute_query
+    from app.db import db_pool
 
     is_valid, result_or_msg = validate_sql(sql)
 
@@ -83,7 +83,7 @@ async def sql_query(sql: str) -> dict[str, Any]:
     sql = result_or_msg
 
     try:
-        data = await execute_query(sql)
+        data = await db_pool.execute_query(sql)
         return {
             "success": True,
             "data": data,
@@ -91,9 +91,20 @@ async def sql_query(sql: str) -> dict[str, Any]:
             "error": None,
         }
     except Exception as e:
+        error_str = str(e).lower()
+        if "connection" in error_str or "connect" in error_str:
+            user_message = "No se pudo conectar a la base de datos. Intenta de nuevo en unos momentos."
+        elif "timeout" in error_str or "timed out" in error_str:
+            user_message = "La consulta tardó demasiado. Por favor intenta con una consulta más específica."
+        elif "access denied" in error_str or "permission" in error_str:
+            user_message = "Error de permisos al acceder a la base de datos."
+        elif "unknown database" in error_str or "doesn't exist" in error_str:
+            user_message = "La base de datos no está disponible."
+        else:
+            user_message = "Ocurrió un error al consultar la base de datos."
         return {
             "success": False,
-            "error": str(e),
+            "error": user_message,
             "row_count": 0,
             "data": [],
         }

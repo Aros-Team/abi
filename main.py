@@ -3,14 +3,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import chat
-from app.db.mysql import MySQLPool
+from app.db import db_pool
 from app.config import settings
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    await MySQLPool.close()
+    await db_pool.close()
 
 
 app = FastAPI(

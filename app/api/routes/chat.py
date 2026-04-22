@@ -1,5 +1,6 @@
 import uuid
 import asyncio
+import logging
 from fastapi import APIRouter, Response
 from fastapi.responses import StreamingResponse
 
@@ -8,6 +9,7 @@ from app.agents.factory import create_business_agent, stream_agent
 from app.services.session_store import session_store
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _agent = None
 
@@ -30,7 +32,11 @@ def get_agent():
         200: {
             "description": "Stream SSE con respuesta del agente",
             "content": {"text/event-stream": {}},
-        }
+        },
+        503: {
+            "description": "Servicio no disponible",
+            "content": {"text/event-stream": {}},
+        },
     },
 )
 async def chat_stream(request: ChatRequest, response: Response):
@@ -46,8 +52,13 @@ async def chat_stream(request: ChatRequest, response: Response):
     - `data: [TOOL_CALL] nombre_herramienta\\n\\n` - cuando se usa una herramienta
     - `data: [TOOL_RESULT] resultado\\n\\n` - cuando la herramienta termina
     - `data: [DONE] session_id\\n\\n` - cuando termina la conversación
+    - `data: [ERROR] mensaje\\n\\n` - cuando ocurre un error
     """
-    session_id = str(uuid.uuid4())
+    raw_session = request.session_id
+    if raw_session and raw_session not in ("undefined", "null", "None", ""):
+        session_id = raw_session
+    else:
+        session_id = str(uuid.uuid4())
 
     response.headers["X-Request-ID"] = session_id
 
@@ -55,37 +66,69 @@ async def chat_stream(request: ChatRequest, response: Response):
 
     history = session_store.get_history(session_id)
     messages = (
-        [("system", build_system_prompt_content())]
+        [("system", build_system_prompt_content(request.message))]
         + history
         + [("human", request.message)]
     )
 
+    logger.warning(
+        f"[DEBUG] session_id={session_id}, history_len={len(history)}, messages_count={len(messages)}"
+    )
+
     response_buffer = []
+    stream_error = None
 
     async def generate():
-        nonlocal response_buffer
+        nonlocal response_buffer, stream_error
         agen = stream_agent(agent, messages, session_id)
-        async for chunk in agen:
-            if chunk.startswith("data: [DONE]"):
-                session_store.add_message(session_id, "user", request.message)
-                full_response = "".join(response_buffer)
-                session_store.add_message(session_id, "assistant", full_response)
-            elif chunk.startswith("data: [TOOL_CALL]") or chunk.startswith(
-                "data: [TOOL_RESULT]"
-            ):
-                response_buffer.append("")
-                yield chunk
-            else:
-                if response_buffer:
-                    response_buffer[-1] += chunk.replace("data: ", "").replace(
-                        "\n\n", ""
-                    )
+        try:
+            async for chunk in agen:
+                if "[ERROR]" in chunk and "[DONE]" not in chunk:
+                    stream_error = chunk.replace("data: ", "").replace("\n\n", "")
+                    response_buffer.append("")
+                    yield chunk
+                elif "[DONE]" in chunk:
+                    if stream_error:
+                        session_store.add_message(session_id, "user", request.message)
+                        session_store.add_message(session_id, "assistant", stream_error)
+                        logger.warning(
+                            f"[CHAT] Saved error to session {session_id}: {stream_error[:50]}..."
+                        )
+                    else:
+                        session_store.add_message(session_id, "user", request.message)
+                        full_response = "".join(response_buffer)
+                        session_store.add_message(
+                            session_id, "assistant", full_response
+                        )
+                        logger.warning(
+                            f"[CHAT] full_response length: {len(full_response)}"
+                        )
+                    yield chunk
+                elif chunk.startswith("data: [TOOL_CALL]") or chunk.startswith(
+                    "data: [TOOL_RESULT]"
+                ):
+                    response_buffer.append("")
+                    yield chunk
                 else:
-                    response_buffer.append(
-                        chunk.replace("data: ", "").replace("\n\n", "")
-                    )
-                yield chunk
-            await asyncio.sleep(0)
+                    if response_buffer:
+                        response_buffer[-1] += chunk.replace("data: ", "").replace(
+                            "\n\n", ""
+                        )
+                    else:
+                        response_buffer.append(
+                            chunk.replace("data: ", "").replace("\n\n", "")
+                        )
+                    yield chunk
+                await asyncio.sleep(0)
+        except Exception as e:
+            logger.error(f"[CHAT] Generator error: {e}")
+            error_msg = "Ocurrió un error inesperado. Por favor intenta de nuevo."
+            yield f"data: [ERROR] {error_msg}\n\n"
+            session_store.add_message(session_id, "user", request.message)
+            session_store.add_message(session_id, "assistant", f"[ERROR] {error_msg}")
+
+    if stream_error:
+        response.status_code = 503
 
     return StreamingResponse(
         generate(),
@@ -99,8 +142,8 @@ async def chat_stream(request: ChatRequest, response: Response):
     )
 
 
-def build_system_prompt_content() -> str:
+def build_system_prompt_content(query: str = "") -> str:
     from app.agents.prompts import build_system_prompt
     from app.models.business import restaurant_context
 
-    return build_system_prompt(restaurant_context)
+    return build_system_prompt(restaurant_context, query=query)

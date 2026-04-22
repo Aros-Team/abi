@@ -2,11 +2,16 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    mysql_host: str = "localhost"
-    mysql_port: int = 3306
-    mysql_user: str = "root"
-    mysql_password: str = ""
-    mysql_database: str = "restaurant_db"
+    environment: str = "development"
+
+    # MySQL Configuration
+    db_host: str = "localhost"
+    db_port: int = 3306
+    db_user: str = "root"
+    db_password: str = ""
+    db_name: str = "restaurant_db"
+
+    db_cloud_sql_instance: str = ""
 
     deepseek_api_key: str = ""
 
@@ -15,6 +20,18 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+
+    @property
+    def detected_db_type(self) -> str:
+        return "mysql"
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment == "production"
+
+    @property
+    def is_development(self) -> bool:
+        return self.environment == "development"
 
     @property
     def cors_origins_list(self) -> list[str]:
