@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from httpx import ConnectError, TimeoutException
 from langchain_deepseek import ChatDeepSeek
 from langchain.agents import create_agent
@@ -18,6 +19,10 @@ def format_sse(content: str, prefix: str = "") -> str:
     escaped = content.replace("\n", "\\n")
     prefix_str = f"{prefix} " if prefix else "data: "
     return f"{prefix_str}{escaped}\n\n"
+
+
+def format_sse_hidden(content: str) -> str:
+    return format_sse(content, "[HIDDEN]")
 
 
 def create_business_agent():
@@ -83,6 +88,7 @@ async def stream_agent(
     in_tool_process = False
     error_occurred = False
     error_message = ""
+    start_time = time.monotonic()
 
     try:
         async for event in agent.astream_events({"messages": messages}, version="v1"):
@@ -92,15 +98,12 @@ async def stream_agent(
                 content = event.get("data", {}).get("chunk", {}).content
                 if content:
                     response_text.append(content)
-                    if in_tool_process:
-                        yield format_sse(content, "[PROCESS]")
-                    else:
-                        yield format_sse(content)
+                    yield format_sse(content)
 
             elif event_type == "on_tool_start":
                 tool_name = event.get("name", "unknown")
                 in_tool_process = True
-                yield format_sse(tool_name, "[TOOL_CALL]")
+                logger.info(f"[AGENT] Tool called: {tool_name}")
 
             elif event_type == "on_tool_end":
                 in_tool_process = False
@@ -108,10 +111,10 @@ async def stream_agent(
                 if isinstance(tool_output, dict):
                     if tool_output.get("success"):
                         rows = tool_output.get("row_count", 0)
-                        yield format_sse(f"{rows} filas encontradas", "[TOOL_RESULT]")
+                        logger.info(f"[AGENT] Tool result: {rows} filas")
                     else:
                         error = tool_output.get("error", "error desconocido")
-                        yield format_sse(f"Error: {error}", "[TOOL_RESULT]")
+                        logger.info(f"[AGENT] Tool error: {error}")
 
     except (ConnectError, TimeoutException) as e:
         error_occurred = True
@@ -126,6 +129,8 @@ async def stream_agent(
         yield format_sse(error_message, "[ERROR]")
 
     finally:
+        elapsed = time.monotonic() - start_time
+        logger.info(f"[AGENT] Stream completed in {elapsed:.2f}s, chars={len(''.join(response_text))}")
         yield format_sse(session_id or "", "[DONE]")
 
     if error_occurred and session_id:

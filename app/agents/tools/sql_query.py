@@ -4,6 +4,7 @@ from typing import Any
 from langchain_core.tools import tool
 
 from app.models.business import restaurant_context
+from app.services.cache import query_cache
 
 logger = logging.getLogger(__name__)
 
@@ -85,17 +86,24 @@ async def sql_query(sql: str) -> dict[str, Any]:
 
     sql = result_or_msg
 
+    cached = query_cache.get_sql_result(sql)
+    if cached is not None:
+        logger.info(f"[SQL_QUERY] Cache HIT for query")
+        return cached
+
     logger.info(f"[SQL_QUERY] Query: {sql}")
 
     try:
         data = await db_pool.execute_query(sql)
         logger.info(f"[SQL_QUERY] OK: {len(data)} rows")
-        return {
+        result = {
             "success": True,
             "data": data,
             "row_count": len(data),
             "error": None,
         }
+        query_cache.set_sql_result(sql, result)
+        return result
     except Exception as e:
         logger.error(f"[SQL_QUERY] ERROR: {type(e).__name__}: {e} | SQL: {sql}")
         error_str = str(e).lower()

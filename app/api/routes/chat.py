@@ -104,11 +104,6 @@ async def chat_stream(request: ChatRequest, response: Response):
                             f"[CHAT] full_response length: {len(full_response)}"
                         )
                     yield chunk
-                elif chunk.startswith("data: [TOOL_CALL]") or chunk.startswith(
-                    "data: [TOOL_RESULT]"
-                ):
-                    response_buffer.append("")
-                    yield chunk
                 else:
                     if response_buffer:
                         response_buffer[-1] += chunk.replace("data: ", "").replace(

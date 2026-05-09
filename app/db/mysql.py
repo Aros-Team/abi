@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 class MySQLPool(DatabasePool):
     _pool: Optional[aiomysql.Pool] = None
+    _pool_stats = {"acquired": 0, "released": 0, "queries": 0, "errors": 0}
 
     @classmethod
     def _get_connection_params(cls) -> dict:
@@ -36,11 +37,13 @@ class MySQLPool(DatabasePool):
                     user=settings.db_user,
                     password=settings.db_password,
                     autocommit=True,
-                    minsize=1,
-                    maxsize=10,
+                    minsize=2,
+                    maxsize=20,
+                    pool_recycle=3600,
+                    pool_pre_ping=True,
                     **params,
                 )
-                logger.info("[DB] Connection pool created successfully")
+                logger.info("[DB] Connection pool created successfully (minsize=2, maxsize=20)")
             except Exception as e:
                 logger.error(f"[DB] Failed to create connection pool: {type(e).__name__}: {e}")
                 raise
@@ -59,5 +62,25 @@ class MySQLPool(DatabasePool):
     async def connection(cls):
         pool = await cls.get_pool()
         async with pool.acquire() as conn:
-            async with conn.cursor(aiomysql.DictCursor) as cursor:
-                yield cursor
+            cls._pool_stats["acquired"] += 1
+            try:
+                async with conn.cursor(aiomysql.DictCursor) as cursor:
+                    yield cursor
+            finally:
+                cls._pool_stats["released"] += 1
+
+    @classmethod
+    def get_stats(cls) -> dict:
+        return {
+            **cls._pool_stats,
+            "pool_size": len(cls._pool) if cls._pool else 0,
+            "pool_open": cls._pool is not None,
+        }
+
+    @classmethod
+    def increment_queries(cls) -> None:
+        cls._pool_stats["queries"] += 1
+
+    @classmethod
+    def increment_errors(cls) -> None:
+        cls._pool_stats["errors"] += 1

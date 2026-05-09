@@ -21,12 +21,10 @@ class DatabasePool(ABC):
         pass
 
     @classmethod
+    @abstractmethod
     @asynccontextmanager
     async def connection(cls):
-        pool = await cls.get_pool()
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cursor:
-                yield cursor
+        pass
 
     @classmethod
     async def execute_query(cls, sql: str) -> list[dict]:
@@ -39,8 +37,12 @@ class DatabasePool(ABC):
                 elapsed = time.monotonic() - start_time
                 row_count = len(result) if result else 0
                 logger.info(f"[DB] Query OK in {elapsed:.3f}s, {row_count} rows")
+                if hasattr(cls, 'increment_queries'):
+                    cls.increment_queries()
                 return result if result else []
         except Exception as e:
             elapsed = time.monotonic() - start_time
             logger.error(f"[DB] Query ERROR after {elapsed:.3f}s: {type(e).__name__}: {e} | SQL: {sql}")
+            if hasattr(cls, 'increment_errors'):
+                cls.increment_errors()
             raise
